@@ -73,16 +73,18 @@ struct CloudFolder: Codable, Identifiable {
     let id: String
     let name: String
     let path: String
-    let parentID: String?
+    let parentId: String?
     let isFavorite: Bool
     let createdAt: String
     let updatedAt: String
+    let childCount: Int?
+    let fileCount: Int?
 }
 
 struct FolderContents: Codable {
     let folder: CloudFolder
     let files: [CloudFile]
-    let subfolders: [CloudFolder]
+    let folders: [CloudFolder]
 }
 
 struct FilesResponse: Codable {

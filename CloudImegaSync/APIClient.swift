@@ -85,13 +85,16 @@ class APIClient: ObservableObject {
     }
 
     func getFolder(id: String) async throws -> FolderContents {
-        let data = try await request(endpoint: "/api/v1/folders/\(id)")
+        let data = try await request(endpoint: "/api/v1/folders/\(id)/contents")
         return try JSONDecoder().decode(FolderContents.self, from: data)
     }
 
     func getRootFolder() async throws -> FolderContents {
-        let data = try await request(endpoint: "/api/v1/folders/root")
-        return try JSONDecoder().decode(FolderContents.self, from: data)
+        // First get root folder ID
+        let rootData = try await request(endpoint: "/api/v1/folders/root")
+        let rootFolder = try JSONDecoder().decode(CloudFolder.self, from: rootData)
+        // Then get its contents
+        return try await getFolder(id: rootFolder.id)
     }
 
     func uploadFile(localURL: URL, folderId: String? = nil) async throws -> CloudFile {

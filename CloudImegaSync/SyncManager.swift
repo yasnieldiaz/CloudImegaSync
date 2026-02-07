@@ -73,14 +73,9 @@ class SyncManager: ObservableObject {
         syncStatus = .syncing
 
         do {
-            // 1. Get list of remote files
-            let remoteFiles = try await fetchAllRemoteFiles()
-
-            // 2. Get list of local files
-            let localFiles = getLocalFiles()
-
-            // 3. Compare and sync
-            await syncFiles(local: localFiles, remote: remoteFiles)
+            // 1. Get root folder and sync recursively
+            let rootFolder = try await APIClient.shared.getRootFolder()
+            try await syncFolder(rootFolder, localPath: syncFolderPath)
 
             syncStatus = .idle
             syncState.lastSyncDate = Date()
@@ -89,6 +84,50 @@ class SyncManager: ObservableObject {
         } catch {
             syncStatus = .error(error.localizedDescription)
             addActivity(.error(error.localizedDescription), fileName: "Sync")
+        }
+    }
+
+    private func syncFolder(_ contents: FolderContents, localPath: String) async throws {
+        let fm = FileManager.default
+
+        // Create local folder if needed
+        if !fm.fileExists(atPath: localPath) {
+            try fm.createDirectory(atPath: localPath, withIntermediateDirectories: true)
+        }
+
+        // Sync subfolders recursively
+        for folder in contents.folders {
+            let subfolderPath = (localPath as NSString).appendingPathComponent(folder.name)
+            let subfolderContents = try await APIClient.shared.getFolder(id: folder.id)
+            try await syncFolder(subfolderContents, localPath: subfolderPath)
+        }
+
+        // Sync files in this folder
+        for remoteFile in contents.files {
+            let localFilePath = (localPath as NSString).appendingPathComponent(remoteFile.name)
+
+            // Download if doesn't exist locally
+            if !fm.fileExists(atPath: localFilePath) {
+                await downloadFile(remoteFile, to: localFilePath)
+            }
+        }
+
+        // Check for local files to upload
+        if let localContents = try? fm.contentsOfDirectory(atPath: localPath) {
+            for item in localContents {
+                let itemPath = (localPath as NSString).appendingPathComponent(item)
+                var isDir: ObjCBool = false
+                fm.fileExists(atPath: itemPath, isDirectory: &isDir)
+
+                if !isDir.boolValue {
+                    // Check if file exists on server
+                    let existsOnServer = contents.files.contains { $0.name == item }
+                    if !existsOnServer && !item.hasPrefix(".") {
+                        // Upload new local file
+                        await uploadFile(at: itemPath, folderId: contents.folder.id)
+                    }
+                }
+            }
         }
     }
 
@@ -198,80 +237,13 @@ class SyncManager: ObservableObject {
         }
     }
 
-    private func fetchAllRemoteFiles() async throws -> [CloudFile] {
-        var allFiles: [CloudFile] = []
-        var page = 1
-        let perPage = 100
 
-        while true {
-            let response = try await APIClient.shared.listFiles(page: page, perPage: perPage)
-            allFiles.append(contentsOf: response.items)
-
-            if response.items.count < perPage {
-                break
-            }
-            page += 1
-        }
-
-        return allFiles
-    }
-
-    private func getLocalFiles() -> [URL] {
-        let url = URL(fileURLWithPath: syncFolderPath)
-        let enumerator = FileManager.default.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        )
-
-        var files: [URL] = []
-        while let fileURL = enumerator?.nextObject() as? URL {
-            if let isFile = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile, isFile {
-                files.append(fileURL)
-            }
-        }
-        return files
-    }
-
-    private func syncFiles(local: [URL], remote: [CloudFile]) async {
-        // Create a map of remote files by name for quick lookup
-        let remoteByName = Dictionary(uniqueKeysWithValues: remote.map { ($0.name, $0) })
-        let localByName = Dictionary(uniqueKeysWithValues: local.map { ($0.lastPathComponent, $0) })
-
-        // Files to upload (local but not remote)
-        for localURL in local {
-            let name = localURL.lastPathComponent
-            if remoteByName[name] == nil {
-                await uploadFile(at: localURL.path)
-            } else if let remoteFile = remoteByName[name] {
-                // Check if local is newer
-                if let attrs = try? FileManager.default.attributesOfItem(atPath: localURL.path),
-                   let modDate = attrs[.modificationDate] as? Date {
-                    let formatter = ISO8601DateFormatter()
-                    if let remoteDate = formatter.date(from: remoteFile.updatedAt),
-                       modDate > remoteDate {
-                        await uploadFile(at: localURL.path)
-                    }
-                }
-            }
-        }
-
-        // Files to download (remote but not local)
-        for remoteFile in remote {
-            if localByName[remoteFile.name] == nil {
-                await downloadFile(remoteFile)
-            }
-        }
-
-        syncedFilesCount = syncState.syncedFiles.count
-    }
-
-    private func uploadFile(at path: String) async {
+    private func uploadFile(at path: String, folderId: String? = nil) async {
         let url = URL(fileURLWithPath: path)
         uploadingCount += 1
 
         do {
-            let cloudFile = try await APIClient.shared.uploadFile(localURL: url)
+            let cloudFile = try await APIClient.shared.uploadFile(localURL: url, folderId: folderId)
 
             // Update sync state
             let checksum = calculateChecksum(for: url)
@@ -297,8 +269,8 @@ class SyncManager: ObservableObject {
         uploadingCount -= 1
     }
 
-    private func downloadFile(_ remoteFile: CloudFile) async {
-        let localURL = URL(fileURLWithPath: syncFolderPath).appendingPathComponent(remoteFile.name)
+    private func downloadFile(_ remoteFile: CloudFile, to localPath: String) async {
+        let localURL = URL(fileURLWithPath: localPath)
         downloadingCount += 1
 
         do {
