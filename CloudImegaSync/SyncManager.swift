@@ -95,6 +95,9 @@ class SyncManager: ObservableObject {
             try fm.createDirectory(atPath: localPath, withIntermediateDirectories: true)
         }
 
+        // Build a map of remote folders by name
+        let remoteFoldersByName = Dictionary(uniqueKeysWithValues: contents.folders.map { ($0.name, $0) })
+
         // Sync subfolders recursively
         for folder in contents.folders {
             let subfolderPath = (localPath as NSString).appendingPathComponent(folder.name)
@@ -112,17 +115,34 @@ class SyncManager: ObservableObject {
             }
         }
 
-        // Check for local files to upload
+        // Check for local items to upload/create
         if let localContents = try? fm.contentsOfDirectory(atPath: localPath) {
             for item in localContents {
+                // Skip hidden files
+                if item.hasPrefix(".") { continue }
+
                 let itemPath = (localPath as NSString).appendingPathComponent(item)
                 var isDir: ObjCBool = false
                 fm.fileExists(atPath: itemPath, isDirectory: &isDir)
 
-                if !isDir.boolValue {
-                    // Check if file exists on server
+                if isDir.boolValue {
+                    // It's a folder - check if exists on server
+                    if let existingFolder = remoteFoldersByName[item] {
+                        // Folder exists, sync its contents
+                        let subfolderContents = try await APIClient.shared.getFolder(id: existingFolder.id)
+                        try await syncFolder(subfolderContents, localPath: itemPath)
+                    } else {
+                        // Create folder on server and sync its contents
+                        let newFolder = try await APIClient.shared.createFolder(name: item, parentId: contents.folder.id)
+                        addActivity(.uploaded, fileName: "📁 \(item)")
+                        // Sync the new folder's contents
+                        let newFolderContents = try await APIClient.shared.getFolder(id: newFolder.id)
+                        try await syncFolder(newFolderContents, localPath: itemPath)
+                    }
+                } else {
+                    // It's a file - check if exists on server
                     let existsOnServer = contents.files.contains { $0.name == item }
-                    if !existsOnServer && !item.hasPrefix(".") {
+                    if !existsOnServer {
                         // Upload new local file
                         await uploadFile(at: itemPath, folderId: contents.folder.id)
                     }
