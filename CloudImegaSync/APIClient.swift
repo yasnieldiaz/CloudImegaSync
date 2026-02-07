@@ -7,8 +7,10 @@ class APIClient: ObservableObject {
 
     @AppStorage("serverURL") var serverURL: String = "https://cloudimega.com"
     @AppStorage("accessToken") private var accessToken: String = ""
+    @AppStorage("refreshToken") private var refreshToken: String = ""
     @Published var currentUser: User?
     @Published var isAuthenticated: Bool = false
+    private var isRefreshing = false
 
     private init() {
         if !accessToken.isEmpty {
@@ -16,6 +18,27 @@ class APIClient: ObservableObject {
                 await validateToken()
             }
         }
+    }
+
+    /// Auto-refresh token
+    private func refreshAccessToken() async -> Bool {
+        guard !refreshToken.isEmpty, !isRefreshing else { return false }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        guard let url = URL(string: serverURL + "/api/v1/auth/refresh") else { return false }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONEncoder().encode(["refreshToken": refreshToken])
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return false }
+            let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
+            accessToken = authResponse.accessToken
+            refreshToken = authResponse.refreshToken
+            print("[API] Token refreshed")
+            return true
+        } catch { return false }
     }
 
     var baseURL: URL {
@@ -44,6 +67,7 @@ class APIClient: ObservableObject {
 
         let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
         accessToken = authResponse.accessToken
+        refreshToken = authResponse.refreshToken
         currentUser = authResponse.user
         isAuthenticated = true
 
@@ -52,6 +76,7 @@ class APIClient: ObservableObject {
 
     func logout() {
         accessToken = ""
+        refreshToken = ""
         currentUser = nil
         isAuthenticated = false
     }
@@ -97,7 +122,7 @@ class APIClient: ObservableObject {
         return try await getFolder(id: rootFolder.id)
     }
 
-    func uploadFile(localURL: URL, folderId: String? = nil) async throws -> CloudFile {
+    func uploadFile(localURL: URL, folderId: String? = nil, retry: Bool = true) async throws -> CloudFile {
         guard let url = URL(string: serverURL + "/api/v1/files") else {
             throw APIError.uploadFailed
         }
@@ -132,8 +157,17 @@ class APIClient: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.uploadFailed
+        }
+
+        if httpResponse.statusCode == 401 && retry {
+            if await refreshAccessToken() {
+                return try await uploadFile(localURL: localURL, folderId: folderId, retry: false)
+            }
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
             throw APIError.uploadFailed
         }
 
@@ -200,7 +234,7 @@ class APIClient: ObservableObject {
 
     // MARK: - Private helpers
 
-    private func request(endpoint: String, method: String = "GET") async throws -> Data {
+    private func request(endpoint: String, method: String = "GET", retry: Bool = true) async throws -> Data {
         guard let url = URL(string: serverURL + endpoint) else {
             throw APIError.invalidResponse
         }
@@ -213,6 +247,12 @@ class APIClient: ObservableObject {
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
+        }
+
+        if httpResponse.statusCode == 401 && retry {
+            if await refreshAccessToken() {
+                return try await self.request(endpoint: endpoint, method: method, retry: false)
+            }
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {

@@ -116,37 +116,49 @@ class SyncManager: ObservableObject {
         }
 
         // Check for local items to upload/create
-        if let localContents = try? fm.contentsOfDirectory(atPath: localPath) {
-            for item in localContents {
-                // Skip hidden files
-                if item.hasPrefix(".") { continue }
+        guard let localContents = try? fm.contentsOfDirectory(atPath: localPath) else { return }
 
-                let itemPath = (localPath as NSString).appendingPathComponent(item)
-                var isDir: ObjCBool = false
-                fm.fileExists(atPath: itemPath, isDirectory: &isDir)
+        // Separate files and folders
+        var filesToUpload: [(path: String, name: String)] = []
+        var foldersToSync: [(path: String, name: String)] = []
 
-                if isDir.boolValue {
-                    // It's a folder - check if exists on server
-                    if let existingFolder = remoteFoldersByName[item] {
-                        // Folder exists, sync its contents
-                        let subfolderContents = try await APIClient.shared.getFolder(id: existingFolder.id)
-                        try await syncFolder(subfolderContents, localPath: itemPath)
-                    } else {
-                        // Create folder on server and sync its contents
-                        let newFolder = try await APIClient.shared.createFolder(name: item, parentId: contents.folder.id)
-                        addActivity(.uploaded, fileName: "📁 \(item)")
-                        // Sync the new folder's contents
-                        let newFolderContents = try await APIClient.shared.getFolder(id: newFolder.id)
-                        try await syncFolder(newFolderContents, localPath: itemPath)
-                    }
-                } else {
-                    // It's a file - check if exists on server
-                    let existsOnServer = contents.files.contains { $0.name == item }
-                    if !existsOnServer {
-                        // Upload new local file
-                        await uploadFile(at: itemPath, folderId: contents.folder.id)
-                    }
+        for item in localContents {
+            if item.hasPrefix(".") { continue }
+            let itemPath = (localPath as NSString).appendingPathComponent(item)
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: itemPath, isDirectory: &isDir)
+
+            if isDir.boolValue {
+                foldersToSync.append((path: itemPath, name: item))
+            } else if !contents.files.contains(where: { $0.name == item }) {
+                filesToUpload.append((path: itemPath, name: item))
+            }
+        }
+
+        // Upload files in PARALLEL
+        if !filesToUpload.isEmpty {
+            print("[Sync] Uploading \(filesToUpload.count) files in parallel...")
+            await withTaskGroup(of: Void.self) { group in
+                for file in filesToUpload {
+                    group.addTask { await self.uploadFile(at: file.path, folderId: contents.folder.id) }
                 }
+            }
+        }
+
+        // Process folders sequentially
+        for folder in foldersToSync {
+            do {
+                if let existing = remoteFoldersByName[folder.name] {
+                    let sub = try await APIClient.shared.getFolder(id: existing.id)
+                    try await syncFolder(sub, localPath: folder.path)
+                } else {
+                    let newFolder = try await APIClient.shared.createFolder(name: folder.name, parentId: contents.folder.id)
+                    addActivity(.uploaded, fileName: "📁 \(folder.name)")
+                    let sub = try await APIClient.shared.getFolder(id: newFolder.id)
+                    try await syncFolder(sub, localPath: folder.path)
+                }
+            } catch {
+                addActivity(.error(error.localizedDescription), fileName: folder.name)
             }
         }
     }
