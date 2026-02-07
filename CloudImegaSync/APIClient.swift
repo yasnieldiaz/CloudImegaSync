@@ -25,7 +25,9 @@ class APIClient: ObservableObject {
     // MARK: - Authentication
 
     func login(email: String, password: String) async throws -> User {
-        let url = baseURL.appendingPathComponent("/api/v1/auth/login")
+        guard let url = URL(string: serverURL + "/api/v1/auth/login") else {
+            throw APIError.invalidResponse
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -41,7 +43,7 @@ class APIClient: ObservableObject {
         }
 
         let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
-        accessToken = authResponse.token
+        accessToken = authResponse.accessToken
         currentUser = authResponse.user
         isAuthenticated = true
 
@@ -67,7 +69,7 @@ class APIClient: ObservableObject {
     }
 
     func getProfile() async throws -> User {
-        let data = try await request(endpoint: "/api/v1/auth/profile")
+        let data = try await request(endpoint: "/api/v1/auth/me")
         return try JSONDecoder().decode(User.self, from: data)
     }
 
@@ -93,7 +95,9 @@ class APIClient: ObservableObject {
     }
 
     func uploadFile(localURL: URL, folderId: String? = nil) async throws -> CloudFile {
-        let url = baseURL.appendingPathComponent("/api/v1/files")
+        guard let url = URL(string: serverURL + "/api/v1/files") else {
+            throw APIError.uploadFailed
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -134,7 +138,9 @@ class APIClient: ObservableObject {
     }
 
     func downloadFile(id: String, to localURL: URL) async throws {
-        let url = baseURL.appendingPathComponent("/api/v1/files/\(id)/download")
+        guard let url = URL(string: serverURL + "/api/v1/files/\(id)/download") else {
+            throw APIError.downloadFailed
+        }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
@@ -149,7 +155,9 @@ class APIClient: ObservableObject {
     }
 
     func deleteFile(id: String) async throws {
-        let url = baseURL.appendingPathComponent("/api/v1/files/\(id)")
+        guard let url = URL(string: serverURL + "/api/v1/files/\(id)") else {
+            throw APIError.deleteFailed
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -163,7 +171,9 @@ class APIClient: ObservableObject {
     }
 
     func createFolder(name: String, parentId: String? = nil) async throws -> CloudFolder {
-        let url = baseURL.appendingPathComponent("/api/v1/folders")
+        guard let url = URL(string: serverURL + "/api/v1/folders") else {
+            throw APIError.createFolderFailed
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -188,7 +198,9 @@ class APIClient: ObservableObject {
     // MARK: - Private helpers
 
     private func request(endpoint: String, method: String = "GET") async throws -> Data {
-        let url = baseURL.appendingPathComponent(endpoint)
+        guard let url = URL(string: serverURL + endpoint) else {
+            throw APIError.invalidResponse
+        }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")

@@ -41,7 +41,8 @@ enum SyncStatus: Equatable {
 
 // MARK: - API Models
 struct AuthResponse: Codable {
-    let token: String
+    let accessToken: String
+    let refreshToken: String
     let user: User
 }
 
@@ -60,17 +61,12 @@ struct CloudFile: Codable, Identifiable {
     let name: String
     let path: String
     let size: Int64
-    let mimeType: String
+    let mimeType: String?
     let checksum: String?
-    let folderID: String?
+    let folder_id: String?
     let isFavorite: Bool
     let createdAt: String
     let updatedAt: String
-
-    enum CodingKeys: String, CodingKey {
-        case id, name, path, size, mimeType, checksum, isFavorite, createdAt, updatedAt
-        case folderID = "folderID"
-    }
 }
 
 struct CloudFolder: Codable, Identifiable {
