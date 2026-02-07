@@ -37,10 +37,10 @@ class SyncManager: ObservableObject {
             syncState = SyncState()
         }
 
-        // Set default sync folder
+        // Set default sync folder in Documents
         if syncFolderPath.isEmpty {
-            let homeDir = FileManager.default.homeDirectoryForCurrentUser
-            syncFolderPath = homeDir.appendingPathComponent("CloudImega").path
+            let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            syncFolderPath = documentsDir.appendingPathComponent("CloudImega").path
         }
 
         // Create sync folder if needed
@@ -108,6 +108,50 @@ class SyncManager: ObservableObject {
     func openSyncFolder() {
         let url = URL(fileURLWithPath: syncFolderPath)
         NSWorkspace.shared.open(url)
+    }
+
+    /// Prepara la carpeta de sincronización después del login
+    func setupAfterLogin() {
+        // Crear la carpeta si no existe
+        createSyncFolderIfNeeded()
+
+        // Crear archivo de bienvenida
+        createWelcomeFile()
+
+        // Abrir la carpeta en Finder
+        openSyncFolder()
+
+        // Iniciar el file watcher
+        startFileWatcher()
+
+        // Iniciar auto sync si está habilitado
+        if autoSync {
+            startAutoSync()
+        }
+    }
+
+    private func createWelcomeFile() {
+        let welcomeURL = URL(fileURLWithPath: syncFolderPath).appendingPathComponent("LEEME.txt")
+
+        // Solo crear si no existe
+        guard !FileManager.default.fileExists(atPath: welcomeURL.path) else { return }
+
+        let welcomeText = """
+        ¡Bienvenido a CloudImega!
+
+        Esta carpeta está sincronizada con tu cuenta de CloudImega.
+
+        Cómo funciona:
+        - Cualquier archivo que pongas aquí se subirá automáticamente a la nube
+        - Los archivos de tu cuenta en la nube se descargarán aquí
+        - Los cambios se sincronizan automáticamente
+
+        Ubicación de la carpeta: \(syncFolderPath)
+
+        Para más información, haz clic en el icono de CloudImega en la barra de menú.
+        """
+
+        try? welcomeText.write(to: welcomeURL, atomically: true, encoding: .utf8)
     }
 
     // MARK: - Private Methods

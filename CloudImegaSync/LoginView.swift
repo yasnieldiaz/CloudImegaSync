@@ -102,9 +102,13 @@ struct LoginView: View {
         Task {
             do {
                 _ = try await apiClient.login(email: email, password: password)
+
+                // Configurar carpeta de sincronización y abrirla
+                SyncManager.shared.setupAfterLogin()
+
                 dismiss()
 
-                // Trigger initial sync
+                // Iniciar sincronización inicial
                 await SyncManager.shared.syncNow()
             } catch {
                 errorMessage = error.localizedDescription
